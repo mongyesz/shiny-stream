@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shiny hunt multistream</title>
+<style>
+  :root{
+    --bg:#0e1b22; --panel:#16303a; --line:#2a4955; --text:#e7f1ee; --muted:#8fb0b3;
+    --gold:#ffcf5c; --coral:#ff7a6b; --cell:#0a1217;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{background:var(--bg);color:var(--text);font:14px/1.35 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;display:flex;flex-direction:column}
+  .bar{display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--panel);border-bottom:1px solid var(--line);flex:0 0 auto;flex-wrap:wrap}
+  .bar h1{font-size:15px;margin:0 auto 0 0;font-weight:700;letter-spacing:.2px}
+  .bar h1 span{color:var(--gold)}
+  button{font:inherit;color:var(--text);background:#21424e;border:1px solid var(--line);border-radius:6px;padding:4px 10px;cursor:pointer}
+  button:hover{background:#2b5360}
+  button:focus-visible,input:focus-visible{outline:2px solid var(--gold);outline-offset:1px}
+  button.primary{background:var(--gold);color:#241a00;border-color:var(--gold);font-weight:700}
+  button.primary:hover{background:#ffd978}
+  .grid{flex:1;min-height:0;display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(3,1fr);gap:3px;padding:3px}
+  .cell{position:relative;display:flex;flex-direction:column;background:var(--cell);min-height:0;min-width:0;border:1px solid var(--line)}
+  .stage{position:relative;flex:1;min-height:0;background:#000}
+  .player,.player iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
+  .empty,.err{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:12px;color:var(--muted)}
+  .err{color:var(--coral);background:rgba(10,18,23,.9);display:none;font-size:13px;z-index:3}
+  .cap{display:flex;align-items:center;gap:6px;padding:3px 6px;background:var(--panel);flex:0 0 auto;min-height:30px}
+  .cap .title{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600}
+  .cap .loop{color:var(--gold);font-size:12px;white-space:nowrap}
+  .cap button{padding:1px 7px}
+  .form{position:absolute;inset:0;display:none;flex-direction:column;gap:6px;padding:10px;background:rgba(14,27,34,.97);overflow:auto;z-index:2}
+  .cell.editing .form{display:flex}
+  .row{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+  .row.two{grid-template-columns:1fr 1fr}
+  label{display:flex;flex-direction:column;gap:2px;font-size:12px;color:var(--muted)}
+  input{font:inherit;color:var(--text);background:#0a1217;border:1px solid var(--line);border-radius:5px;padding:5px 7px;width:100%}
+  .actions{display:flex;gap:6px;margin-top:auto;flex-wrap:wrap}
+  .hint{font-size:11px;color:var(--muted)}
+  body.hideforms .cap .edit{display:none}
+  @media (max-width:800px){
+    body{display:block;height:auto}
+    .grid{display:block}
+    .cell{margin-bottom:3px;height:auto}
+    .stage{flex:none;aspect-ratio:16/9}
+    .row{grid-template-columns:1fr}
+    .cell.editing .stage{min-height:340px}
+  }
+  @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+<div class="bar">
+  <h1>Shiny hunt <span>multistream</span></h1>
+  <button id="playAll">Mind indítása</button>
+  <button id="pauseAll">Mind szüneteltetése</button>
+  <button id="muteAll">Mind némítása</button>
+  <button id="unmuteAll">Mind hangosítása</button>
+  <button id="clearAll">Összes törlése</button>
+</div>
+<div class="grid" id="grid"></div>
+
+<datalist id="games">
+  <option value="Sword"><option value="Shield"><option value="Brilliant Diamond"><option value="Shining Pearl">
+  <option value="Legends: Arceus"><option value="Scarlet"><option value="Violet"><option value="Legends: Z-A">
+  <option value="Let's Go Pikachu"><option value="Let's Go Eevee"><option value="Sun"><option value="Moon">
+  <option value="Ultra Sun"><option value="Ultra Moon"><option value="X"><option value="Y">
+  <option value="Omega Ruby"><option value="Alpha Sapphire"><option value="Black"><option value="White">
+  <option value="Black 2"><option value="White 2"><option value="HeartGold"><option value="SoulSilver">
+  <option value="Platinum"><option value="Diamond"><option value="Pearl"><option value="Emerald">
+  <option value="FireRed"><option value="LeafGreen"><option value="Crystal"><option value="Gold"><option value="Silver">
+</datalist>
+<datalist id="methods">
+  <option value="Random encounter"><option value="Soft reset"><option value="Masuda method">
+  <option value="Masuda + Shiny Charm"><option value="Egg hatching"><option value="Mass outbreak">
+  <option value="Massive mass outbreak"><option value="Sandwich (Sparkling Power)"><option value="Poké Radar">
+  <option value="Chain fishing"><option value="SOS chaining"><option value="Catch combo">
+  <option value="DexNav"><option value="Friend Safari"><option value="Horde"><option value="Dynamax Adventure">
+  <option value="Max Raid"><option value="Tera Raid"><option value="Fishing"><option value="Static encounter">
+  <option value="Full odds"><option value="Roaming"><option value="Wormhole">
+</datalist>
+
+<script>
+const N = 9;
+const KEY = "shinyMultiStream.v1";
+const blank = () => ({pokemon:"",game:"",method:"",url:"",start:"",end:""});
+
+let state;
+try { state = JSON.parse(localStorage.getItem(KEY)); } catch(e){}
+if (!Array.isArray(state) || state.length !== N) state = Array.from({length:N}, blank);
+
+const save = () => { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch(e){} };
+
+const players = Array(N).fill(null);   // {api, ready, id}
+let apiReady = false;
+
+function parseTime(v){
+  if (v === "" || v == null) return null;
+  v = String(v).trim().replace(",", ".");
+  if (v.includes(":")){
+    const p = v.split(":").map(Number);
+    if (p.some(isNaN)) return null;
+    return p.reduce((a,b) => a*60 + b, 0);
+  }
+  const n = parseFloat(v);
+  return isNaN(n) ? null : n;
+}
+
+function ytInfo(u){
+  u = (u || "").trim();
+  if (/^[\w-]{11}$/.test(u)) return {id:u, t:null};
+  try{
+    const x = new URL(u);
+    let id = null;
+    if (x.hostname === "youtu.be") id = x.pathname.slice(1, 12);
+    else if (x.searchParams.get("v")) id = x.searchParams.get("v");
+    else { const m = x.pathname.match(/\/(embed|shorts|live|v)\/([\w-]{11})/); if (m) id = m[2]; }
+    const t = x.searchParams.get("t") || x.searchParams.get("start");
+    return id ? {id, t: t ? parseInt(t, 10) : null} : null;
+  }catch(e){ return null; }
+}
+
+const grid = document.getElementById("grid");
+const cells = [];
+
+function build(i){
+  const c = document.createElement("div");
+  c.className = "cell";
+  c.innerHTML = `
+    <div class="stage">
+      <div class="player"></div>
+      <div class="empty">Üres hely – kattints a ✎ gombra</div>
+      <div class="err"></div>
+      <div class="form">
+        <div class="row">
+          <label>Pokémon<input data-k="pokemon" placeholder="pl. Gossifleur"></label>
+          <label>Játék<input data-k="game" list="games" placeholder="pl. Sword"></label>
+          <label>Metódus<input data-k="method" list="methods" placeholder="pl. Masuda method"></label>
+        </div>
+        <label>YouTube-link<input data-k="url" placeholder="https://www.youtube.com/watch?v=..."></label>
+        <div class="row two">
+          <label>Loop kezdete (mp vagy p:mp)<input data-k="start" placeholder="0"></label>
+          <label>Loop vége (mp vagy p:mp)<input data-k="end" placeholder="pl. 45 vagy 1:30"></label>
+        </div>
+        <div class="hint">Ha a vég üres, a videó nem loopol. A link nélkül a Keresés gomb megnyitja a YouTube-keresést a megadott adatokkal.</div>
+        <div class="actions">
+          <button class="search">Keresés YouTube-on</button>
+          <button class="primary load">Betöltés</button>
+          <button class="clear">Törlés</button>
+          <button class="close">Bezár</button>
+        </div>
+      </div>
+    </div>
+    <div class="cap">
+      <span class="title"></span>
+      <span class="loop"></span>
+      <button class="mute" title="Némítás / hang">🔇</button>
+      <button class="fs" title="Teljes képernyő">⛶</button>
+      <button class="edit" title="Szerkesztés">✎</button>
+    </div>`;
+  grid.appendChild(c);
+
+  const q = s => c.querySelector(s);
+  const inputs = c.querySelectorAll("input[data-k]");
+  inputs.forEach(inp => {
+    inp.value = state[i][inp.dataset.k];
+    inp.addEventListener("input", () => { state[i][inp.dataset.k] = inp.value; save(); caption(i); });
+    inp.addEventListener("keydown", e => { if (e.key === "Enter") load(i); });
+    if (inp.dataset.k === "url") inp.addEventListener("change", () => { if (inp.value.trim()) load(i); });
+  });
+
+  q(".edit").onclick = () => { if (c.classList.contains("editing")) closeEdit(i); else c.classList.add("editing"); };
+  q(".close").onclick = () => closeEdit(i);
+  q(".load").onclick = () => load(i);
+  q(".search").onclick = () => {
+    const s = state[i];
+    const query = ["shiny", s.pokemon, s.game, s.method].filter(Boolean).join(" ");
+    window.open("https://www.youtube.com/results?search_query=" + encodeURIComponent(query), "_blank", "noopener");
+  };
+  q(".clear").onclick = () => {
+    destroy(i);
+    state[i] = blank(); save();
+    inputs.forEach(inp => inp.value = "");
+    caption(i);
+  };
+  q(".fs").onclick = () => { (c.requestFullscreen || c.webkitRequestFullscreen).call(c); };
+  q(".mute").onclick = () => {
+    const p = players[i]; if (!p || !p.ready) return;
+    if (p.api.isMuted()) p.api.unMute(); else p.api.mute();
+    muteIcon(i);
+  };
+
+  cells[i] = {el:c, q};
+  caption(i);
+  if (!state[i].url) c.classList.add("editing");
+}
+
+function caption(i){
+  const s = state[i], {q} = cells[i];
+  const t = [s.pokemon, s.game, s.method].filter(Boolean).join(" · ");
+  q(".title").textContent = t || "Üres hely";
+  const a = parseTime(s.start), b = parseTime(s.end);
+  q(".loop").textContent = (b != null && b > (a || 0)) ? `↻ ${a || 0}–${b} mp` : "";
+  q(".empty").textContent = s.url ? "Betöltés…" : "Üres hely – kattints a ✎ gombra";
+  q(".empty").style.display = players[i] ? "none" : "flex";
+}
+
+function closeEdit(i){
+  if (state[i].url && !players[i]) load(i);
+  else cells[i].el.classList.remove("editing");
+}
+
+function muteIcon(i){
+  const p = players[i];
+  cells[i].q(".mute").textContent = (p && p.ready && !p.api.isMuted()) ? "🔊" : "🔇";
+}
+
+function destroy(i){
+  if (players[i]) { try { players[i].api.destroy(); } catch(e){} players[i] = null; }
+  const box = cells[i].q(".player"); box.innerHTML = "";
+  cells[i].q(".err").style.display = "none";
+  caption(i);
+}
+
+function load(i){
+  const s = state[i], {el, q} = cells[i];
+  const info = ytInfo(s.url);
+  q(".err").style.display = "none";
+  if (!info){
+    const e = q(".err"); e.textContent = "Nem ismerem fel a YouTube-linket."; e.style.display = "flex";
+    return;
+  }
+  if (!s.start && info.t){ s.start = String(info.t); q('input[data-k="start"]').value = s.start; save(); }
+  el.classList.remove("editing");
+  const start = Math.max(0, parseTime(s.start) || 0);
+
+  if (!apiReady){                  // az API betöltése után automatikusan újraindul
+    const e = q(".err"); e.textContent = "A YouTube-lejátszó még töltődik…"; e.style.display = "flex";
+    return;
+  }
+  if (players[i] && players[i].id === info.id){
+    if (players[i].ready){ players[i].api.seekTo(start, true); players[i].api.playVideo(); }
+    caption(i); return;
+  }
+  destroy(i);
+  const holder = document.createElement("div");
+  q(".player").appendChild(holder);
+  const p = {api:null, ready:false, id:info.id};
+  players[i] = p;
+  p.api = new YT.Player(holder, {
+    width:"100%", height:"100%", videoId:info.id,
+    playerVars:{autoplay:1, mute:1, start:Math.floor(start), playsinline:1, rel:0, modestbranding:1},
+    events:{
+      onReady: e => { p.ready = true; e.target.mute(); e.target.playVideo(); muteIcon(i); },
+      onStateChange: e => {
+        if (e.data === YT.PlayerState.ENDED){ e.target.seekTo(parseTime(state[i].start) || 0, true); e.target.playVideo(); }
+      },
+      onError: e => {
+        const er = q(".err");
+        er.textContent = "A videó nem játszható be (hibakód: " + e.data + "). " +
+          (e.data === 153 || e.data === 152 ? "Nyisd meg az oldalt helyi szerverről vagy webhelyről (ne file:// címről)." :
+           e.data === 101 || e.data === 150 ? "A feltöltő letiltotta a beágyazást." : "Ellenőrizd a linket.");
+        er.style.display = "flex";
+      }
+    }
+  });
+  caption(i);
+}
+
+for (let i = 0; i < N; i++) build(i);
+
+// YouTube IFrame API
+window.onYouTubeIframeAPIReady = () => {
+  apiReady = true;
+  state.forEach((s, i) => { if (s.url) load(i); });
+};
+const tag = document.createElement("script");
+tag.src = "https://www.youtube.com/iframe_api";
+tag.onerror = () => cells.forEach(c => {
+  const e = c.q(".err");
+  e.textContent = "Nem sikerült betölteni a YouTube-lejátszót (nincs internet, vagy egy bővítmény/hirdetésblokkoló letiltotta).";
+  e.style.display = "flex";
+});
+document.head.appendChild(tag);
+
+// Loop: ha lejátszás közben eléri a végpontot, visszaugrik a kezdetre
+setInterval(() => {
+  players.forEach((p, i) => {
+    if (!p || !p.ready) return;
+    const a = parseTime(state[i].start) || 0, b = parseTime(state[i].end);
+    if (b == null || b <= a) return;
+    try {
+      if (p.api.getPlayerState() === 1 && p.api.getCurrentTime() >= b) p.api.seekTo(a, true);
+    } catch(e){}
+  });
+}, 150);
+
+// Globális vezérlők
+const each = fn => players.forEach((p, i) => { if (p && p.ready) { try { fn(p.api); } catch(e){} muteIcon(i); } });
+document.getElementById("playAll").onclick   = () => each(a => a.playVideo());
+document.getElementById("pauseAll").onclick  = () => each(a => a.pauseVideo());
+document.getElementById("muteAll").onclick   = () => each(a => a.mute());
+document.getElementById("unmuteAll").onclick = () => each(a => a.unMute());
+document.getElementById("clearAll").onclick  = () => {
+  if (!confirm("Biztosan törlöd mind a 9 helyet?")) return;
+  for (let i = 0; i < N; i++){
+    destroy(i); state[i] = blank();
+    cells[i].el.querySelectorAll("input[data-k]").forEach(inp => inp.value = "");
+    cells[i].el.classList.add("editing"); caption(i);
+  }
+  save();
+};
+</script>
+</body>
+</html>
